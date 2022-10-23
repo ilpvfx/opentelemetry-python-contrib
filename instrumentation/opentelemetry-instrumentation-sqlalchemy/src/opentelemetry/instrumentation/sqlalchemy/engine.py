@@ -106,6 +106,8 @@ class EngineTracer:
         )
         listen(engine, "after_cursor_execute", _after_cur_exec)
         listen(engine, "handle_error", _handle_error)
+        listen(engine, "checkout", self._checkout_connection)
+        listen(engine, "checkin", _checkin_connection)
 
     def _operation_name(self, db_name, statement):
         parts = []
@@ -121,6 +123,21 @@ class EngineTracer:
         if not parts:
             return self.vendor
         return " ".join(parts)
+
+    # pylint: disable=unused-argument
+    def _checkout_connection(self, conn, connection_record, connection_proxy):
+        attrs, found = _get_attributes_from_url(self.engine.url)
+        if found:
+            db_name = attrs.get(SpanAttributes.DB_NAME, "")
+        else:
+            db_name = ""
+
+        span = self.tracer.start_span(
+            f"CONNECTION {db_name}".strip(),
+            kind=trace.SpanKind.CLIENT
+        )
+        with trace.use_span(span, end_on_exit=False):
+            connection_proxy.info["_otel_span"] = span
 
     # pylint: disable=unused-argument
     def _before_cur_exec(
@@ -163,6 +180,12 @@ class EngineTracer:
         context._otel_span = span
 
         return statement, params
+
+# pylint: disable=unused-argument
+def _checkin_connection(conn, record):
+    span = record.info.pop("_otel_span")
+    if span is not None:
+        span.end()
 
 
 # pylint: disable=unused-argument
